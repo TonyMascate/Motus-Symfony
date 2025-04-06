@@ -6,6 +6,3 @@ lexik_jwt_authentication:
         cookie:
             enabled: true
             name: BEARER
-    # ...
-    set_cookies:
-        BEARER: ~

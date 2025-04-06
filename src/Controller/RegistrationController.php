@@ -4,6 +4,7 @@ namespace App\Controller;
 
 use App\DTO\RegisterDTO;
 use App\Entity\User;
+use App\Exception\ErrorResponseFactory;
 use App\Service\AuthenticationService;
 use Doctrine\ORM\EntityManagerInterface;
 use Lexik\Bundle\JWTAuthenticationBundle\Services\JWTTokenManagerInterface;
@@ -34,82 +35,35 @@ final class RegistrationController extends AbstractController
         $jsonData = $request->getContent();
 
         try {
-            // Désérialiser le JSON directement en objet RegisterDTO
             $registerDTO = $serializer->deserialize($jsonData, RegisterDTO::class, 'json');
         } catch (\Exception $e) {
-            // Ne pas retourner le message d'exception pour des raisons de sécurité
-            return new JsonResponse([
-                'error' => [
-                    'message' => 'JSON invalide',
-                    'code' => Response::HTTP_BAD_REQUEST
-                ]
-            ], Response::HTTP_BAD_REQUEST);
+            return ErrorResponseFactory::create('JSON invalide', Response::HTTP_BAD_REQUEST);
         }
 
-        // Valider le DTO
         $errors = $validator->validate($registerDTO);
         if (count($errors) > 0) {
-            $errorMessages = [];
-            foreach ($errors as $error) {
-                $errorMessages[$error->getPropertyPath()] = $error->getMessage();
-            }
-            return new JsonResponse([
-                'error' => [
-                    'message' => 'Erreur de validation',
-                    'code' => Response::HTTP_BAD_REQUEST,
-                    'details' => $errorMessages
-                ]
-            ], Response::HTTP_BAD_REQUEST);
+            return ErrorResponseFactory::create(
+                'Erreur de validation',
+                Response::HTTP_BAD_REQUEST,
+                ErrorResponseFactory::formatValidationErrors($errors)
+            );
         }
 
         try {
             $token = $authenticationService->registerUser($registerDTO);
         } catch (HttpExceptionInterface $e) {
-            return new JsonResponse([
-                'error' => [
-                    'message' => $e->getMessage(),
-                    'code' => $e->getStatusCode()
-                ]
-            ], $e->getStatusCode());
-        } catch (\Throwable) { // `Throwable` capture aussi bien `Exception` que `Error`
-            return new JsonResponse([
-                'error' => [
-                    'message' => "Une erreur interne est survenue.",
-                    'code' => Response::HTTP_INTERNAL_SERVER_ERROR
-                ]
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
+            return ErrorResponseFactory::create($e->getMessage(), $e->getStatusCode());
+        } catch (\Throwable $e) {
+            return ErrorResponseFactory::create("Une erreur interne est survenue.", Response::HTTP_INTERNAL_SERVER_ERROR);
         }
 
-
-        // Création de la réponse en cas de succès
-        $response = new JsonResponse([
-            'message' => 'Inscription réussie'
-        ], Response::HTTP_CREATED);
-
-        try {
-            // Création du cookie sécurisé avec le token JWT
-            $cookie = Cookie::create(
-                'BEARER',
-                $token,
-                time() + 3600,  // 1 heure d'expiration
-                '/',
-                null, // Défini dans le fichier .env en prod
-                true,  // Secure
-                true,  // HttpOnly
-                false,
-                Cookie::SAMESITE_NONE // Si frontend séparé
-            );
-
-            // Ajouter le cookie à la réponse
-            $response->headers->setCookie($cookie);
-        } catch (\Exception $e) {
-            return new JsonResponse([
-                'error' => [
-                    'message' => 'Erreur lors de la création du cookie',
-                    'code' => Response::HTTP_INTERNAL_SERVER_ERROR
-                ]
-            ], Response::HTTP_INTERNAL_SERVER_ERROR);
-        }
+        $response = new JsonResponse(['message' => 'Inscription réussie'], Response::HTTP_CREATED);
+        $response->headers->setCookie(
+            Cookie::create('BEARER', $token)
+                ->withSecure(true)
+                ->withHttpOnly(true)
+                ->withSameSite('None')
+        );
 
         return $response;
     }
@@ -149,46 +103,52 @@ final class RegistrationController extends AbstractController
         // Création du token JWT
         $token = $jwtManager->create($user);
 
-        // Création d'un cookie HTTP Only contenant le token
-        $cookie = Cookie::create(
-            'BEARER',
-            $token,
-            time() + 3600,  // 1 heure d'expiration
-            '/',
-            null, // Défini dans le fichier .env en prod
-            false,  // Secure
-            true,  // HttpOnly
-            false,
-            Cookie::SAMESITE_LAX // Si frontend séparé
-        );
-
-
         $response = new JsonResponse([
             'message' => 'Connexion réussie'
         ]);
-        $response->headers->setCookie($cookie);
+        $response->headers->setCookie(
+            Cookie::create('BEARER', $token)
+                ->withSecure(true)
+                ->withHttpOnly(true)
+                ->withSameSite('None') // ou 'Lax' si même domaine
+        );
 
         return $response;
     }
 
-    #[Route('/api/verify', name: 'api_verify', methods: ['GET'])]
-    #[IsGranted('IS_AUTHENTICATED_FULLY')]
-    public function verify(Request $request, Security $security): Response
+    #[Route('/api/logout', name: 'app_logout', methods: ['POST'])]
+    public function logout(): JsonResponse
     {
-        $user = $this->getUser(); // Récupère l'utilisateur connecté
+        try {
+            $response = new JsonResponse(['message' => 'Déconnexion réussie.']);
+            $response->headers->setCookie(
+                Cookie::create('BEARER', '')
+                    ->withSecure(true)
+                    ->withHttpOnly(true)
+                    ->withSameSite('None')
+                    ->withExpires(0) // Supprime le cookie
+            );
+
+            return $response;
+        } catch (\Throwable $e) {
+            return ErrorResponseFactory::create(
+                "Une erreur est survenue lors de la déconnexion.",
+                Response::HTTP_INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
+
+    #[Route('/api/auth/check', name: 'auth_check', methods: ['GET'])]
+    public function checkAuth(): JsonResponse
+    {
+        $user = $this->getUser();
 
         if (!$user) {
-            return new JsonResponse([
-                'error' => [
-                    'message' => 'Non authentifié',
-                    'code' => Response::HTTP_UNAUTHORIZED
-                ]
-            ], Response::HTTP_UNAUTHORIZED);
+            return new JsonResponse(['authenticated' => false], 401);
         }
 
-        return new JsonResponse([
-            'message' => 'Utilisateur authentifié',
-            'user' => $user->getPseudo()
-        ]);
+        return new JsonResponse(['authenticated' => true]);
     }
+
 }

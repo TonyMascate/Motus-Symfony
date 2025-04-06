@@ -2,6 +2,7 @@
 
 namespace App\Service;
 
+use App\Entity\Scores;
 use App\Repository\ScoresRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\Response;
@@ -18,12 +19,6 @@ class ScoreService
         $this->repository = $repository;
     }
 
-    /**
-     * Récupération des scores
-     *
-     * @return array
-     * @throws HttpException en cas d'erreur lors de la récupération des scores.
-     */
     public function getScores(): array
     {
         try {
@@ -31,6 +26,25 @@ class ScoreService
         } catch (\Throwable $e) {
             // On peut ajouter du log ici si nécessaire.
             throw new HttpException(Response::HTTP_INTERNAL_SERVER_ERROR, 'Erreur lors de la récupération des scores');
+        }
+    }
+
+    public function updateScore($user, int $score): void
+    {
+        if ($user) {
+            $scoreRepo = $this->entityManager->getRepository(Scores::class);
+            $scoreEntity = $scoreRepo->findOneBy(['user' => $user]);
+
+            if (!$scoreEntity) {
+                $scoreEntity = new Scores();
+                $scoreEntity->setUser($user);
+                $scoreEntity->setScore($score);
+                $this->entityManager->persist($scoreEntity);
+            } else {
+                $scoreEntity->setScore($scoreEntity->getScore() + $score);
+            }
+
+            $this->entityManager->flush();
         }
     }
 }
